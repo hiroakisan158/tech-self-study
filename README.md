@@ -13,6 +13,7 @@
 | [typescript-fable-101](typescript-fable-101/README.md) | ⚔️ 冒険者ギルド「Typed Tavern」 | TypeScript + JS ランタイムの理解 | **Web 3 部作の 1 作目** |
 | [react-fable-101](react-fable-101/README.md) | 🎭 劇場「Reactive Theater」 | React(宣言的 UI・Hooks) | **Web 3 部作の 2 作目** |
 | [nextjs-fable-101](nextjs-fable-101/README.md) | 🍽️ 食堂「Bistro Next」 | Next.js(フルスタック開発) | **Web 3 部作の 3 作目** |
+| [tech-stack-2026](tech-stack-2026/README.md) | 🧭 技術選定の地図 | 2026年版デファクト・流派対立・選定の原則 | 横断の読み物(いつ読んでも可) |
 
 各教材は共通の構成です:
 
