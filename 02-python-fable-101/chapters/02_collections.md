@@ -137,8 +137,29 @@ flowchart TD
 
 ## 入れ子 — 本格的な在庫台帳
 
-コレクションはコレクションを入れられます。「商品名 → 詳細情報」の台帳を作りましょう。
-これが今後の章でお店の中心データになります。
+### まずは困りごとから
+
+「回復薬」1 品の情報(値段・在庫・材料)を dict で書くと、こうなります。
+
+```python
+hp_potion = {"price": 50, "stock": 10, "ingredients": ("薬草", "きれいな水")}
+```
+
+でも商品は 1 つだけじゃありません。これを商品ごとに増やすと…
+
+```python
+hp_potion   = {"price": 50,  "stock": 10, "ingredients": ("薬草", "きれいな水")}
+mp_potion   = {"price": 80,  "stock": 6,  "ingredients": ("魔力草", "きれいな水")}
+elixir      = {"price": 500, "stock": 1,  "ingredients": ("世界樹の葉", "妖精の涙", "月光水")}
+```
+
+第1章の `potion1`, `potion2` と同じ問題が再発しています。変数を増やすのではなく、
+**「商品名」をキーにして、この dict たちをまとめて 1 つの箱に入れてしまえばいい** — これが入れ子の発想です。
+
+### dict の中に dict を入れる
+
+「値」の場所には、数値や文字列だけでなく **dict や tuple も置けます**。
+つまり、上の 3 つの dict を「商品名 → dict」という台帳(dict)にまとめてしまいましょう。
 
 ```python
 inventory = {
@@ -146,10 +167,56 @@ inventory = {
     "マナポーション": {"price": 80, "stock": 6, "ingredients": ("魔力草", "きれいな水")},
     "エリクサー": {"price": 500, "stock": 1, "ingredients": ("世界樹の葉", "妖精の涙", "月光水")},
 }
-
-print(inventory["回復薬"]["price"])   # 50
-inventory["回復薬"]["stock"] -= 1     # 1 本売れた
 ```
+
+`inventory` は dict で、そのキー(`"回復薬"` など)に対応する値もまた dict です。
+さらにその中の `"ingredients"` の値は tuple。**dict → dict → tuple** と 3 階層になっています。
+
+```mermaid
+flowchart LR
+    inv["inventory (dict)"] -->|キー: 回復薬| hp["dict<br/>price: 50<br/>stock: 10<br/>ingredients: (...)"]
+    inv -->|キー: マナポーション| mp["dict<br/>price: 80<br/>stock: 6<br/>ingredients: (...)"]
+    inv -->|キー: エリクサー| el["dict<br/>price: 500<br/>stock: 1<br/>ingredients: (...)"]
+    hp -->|キー: ingredients| hpi["tuple<br/>(薬草, きれいな水)"]
+```
+
+### アクセスは「1段ずつ」たどる
+
+いきなり `inventory["回復薬"]["price"]` と書くと難しく見えますが、実は 1 段ずつ分解できます。
+
+```python
+# ステップ1: まず "回復薬" のキーを引く → 中身は dict がまるごと返ってくる
+detail = inventory["回復薬"]
+print(detail)   # {'price': 50, 'stock': 10, 'ingredients': ('薬草', 'きれいな水')}
+
+# ステップ2: その dict に対して、さらに "price" のキーを引く
+print(detail["price"])   # 50
+
+# この2ステップを続けて書いたのが inventory["回復薬"]["price"]
+print(inventory["回復薬"]["price"])   # 50
+```
+
+「`[キー]` を書くたびに、1 段下の階層に潜っていく」とイメージすると迷いません。
+更新も同じ考え方で、潜った先の値を書き換えるだけです。
+
+```python
+inventory["回復薬"]["stock"] -= 1                 # 1 本売れた(2段潜って更新)
+inventory["解毒薬"] = {"price": 120, "stock": 4}  # 新商品を1段目に丸ごと追加
+print(inventory["エリクサー"]["ingredients"][0])   # 3段潜る: 'エリクサー' → 'ingredients' → [0]
+```
+
+### ⚠️ ラベルの罠は入れ子でも起きる
+
+`shelf_b = shelf_a` と同じ罠が、入れ子の中の list/dict にも潜んでいます。
+`.copy()` は **1 階層分しかコピーしない**(浅いコピー)ので要注意です。
+
+```python
+backup = inventory.copy()
+backup["回復薬"]["stock"] = 0   # ← inventory["回復薬"] も一緒に 0 になる!(中身は共有されたまま)
+```
+
+深いところまで完全に独立したコピーが欲しい場合は `copy.deepcopy(inventory)` を使いますが、
+これは今すぐ覚えなくて大丈夫です。「1階層だけのコピーは危ない」とだけ覚えておきましょう。
 
 ## 🧪 完成コード: `shop/day2.py`
 
