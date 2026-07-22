@@ -40,8 +40,13 @@ flowchart TD
         C15 --> C16["第16章 卒業制作<br/>テストと完成"]
     end
 
+    subgraph 番外編["✨ 番外編 — 最新設備でお店を運営"]
+        A17["第17章 uv<br/>パッケージ管理を最新式に"]
+    end
+
     C6 --> C7
     C12 --> C13
+    C16 -.-> A17
 ```
 
 ## 📚 目次
@@ -64,6 +69,7 @@ flowchart TD
 | [第14章](chapters/14_async.md) | 行列をさばく | asyncio、並行処理、GIL | 複数のお客さんを同時に接客 |
 | [第15章](chapters/15_metaprogramming.md) | プラグインで無限拡張 | ディスクリプタ、メタクラス | 新商品が自動登録される |
 | [第16章](chapters/16_final.md) | 卒業制作 | pytest、プロジェクト構成 | テスト付き完成品が納品される |
+| [番外編](chapters/17_uv.md) | 最新設備でお店を運営 | uv、pyproject.toml、lockfile | 仕入れと環境構築が一瞬になる |
 
 ## 🎯 対象読者
 
