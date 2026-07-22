@@ -57,6 +57,28 @@ $ pytest
 
 ### fixture — 毎テスト共通の開店準備
 
+**fixture が解決する問題** から見ていきます。`Inventory` を使うテストが増えるほど、
+どのテストにも「在庫を用意する」という同じ準備コードが並びます。
+
+```python
+# ❌ fixture なし: どのテストにも同じ準備コードが重複する
+def test_inventory_sell():
+    inv = Inventory()
+    inv.add(Potion("回復薬", 50, 10))
+    inv.add(Potion("エリクサー", 500, 1))
+    inv.sell("回復薬", 2)
+    assert inv.find("回復薬").stock == 8
+
+def test_inventory_contains():
+    inv = Inventory()                      # ← また同じ3行
+    inv.add(Potion("回復薬", 50, 10))
+    inv.add(Potion("エリクサー", 500, 1))
+    assert "回復薬" in inv
+```
+
+準備コードが 10 個のテストに散らばると、在庫の初期値を1つ変えるだけで 10 箇所を
+書き換える羽目になります。**「テストごとに必要な準備」を1箇所にまとめて使い回す** のが fixture です。
+
 ```python
 @pytest.fixture
 def stocked_inventory():
@@ -76,6 +98,96 @@ def test_inventory_contains(stocked_inventory):    # ここには新品が届く
     assert "回復薬" in stocked_inventory           # 第9章の __contains__ もテスト!
 ```
 
+### 裏側の仕組み — なぜ import も呼び出しもしていないのに動くのか
+
+`test_inventory_sell(stocked_inventory)` を見て、「`stocked_inventory` ってどこから来たの?
+呼び出してもいないのに」と思ったかもしれません。種を明かすと、これは **引数の名前を
+文字列としてマッチングしている** だけです。
+
+1. `pytest` はテスト関数を実行する前に、`inspect`(第15章のイントロスペクション!)で
+   その関数の **引数名一覧** を調べます
+2. `stocked_inventory` という引数名を見つけたら、「同じ名前で `@pytest.fixture` が
+   付いた関数はないか」を探します
+3. 見つかった fixture 関数を **呼び出し**、その **返り値** を、同じ名前の引数に渡します
+
+つまり `stocked_inventory` という **名前そのもの** が、fixture 関数とテスト関数をつなぐ
+唯一の手がかりです。魔法のように見えますが、正体は「文字列が一致するものを実行時に探して
+呼び出す」という、第15章で見た `getattr` 系のテクニックの応用にすぎません。
+
+そしてこの fixture 関数は **リクエストしたテストごとに毎回新しく実行される** のがデフォルトです。
+`test_inventory_sell` が在庫を2個売っても、次の `test_inventory_contains` には
+まっさらな `stocked_inventory` が届く ―― だから **テストの実行順序を変えても結果が変わらない**
+という、テストにとって非常に重要な性質(独立性)が保証されます。
+
+### yield で後片付けもできる — 第10章・第12章の再登場
+
+fixture は `return` の代わりに `yield` を使うと、**テスト終了後の後片付け** まで書けます。
+これは第12章の `@contextmanager` と全く同じ仕組みです。
+
+```python
+@pytest.fixture
+def temp_save_file(tmp_path):              # tmp_path は pytest 標準の組み込み fixture
+    path = tmp_path / "shop_save.json"
+    yield path                              # ← ここまでが「準備」、テスト本体に path を渡す
+    if path.exists():                       # ← テストが終わったら(成功でも失敗でも)ここが走る
+        path.unlink()                       #    後片付け: 一時ファイルを消す
+
+def test_save_and_load(temp_save_file):
+    save_shop([], 100, path=temp_save_file)
+    inventory, gold = load_shop(path=temp_save_file)
+    assert gold == 100
+```
+
+`yield` の手前が「開店準備」、後ろが「閉店処理」に対応するのは第12章の `brewing_session` と
+同じ発想です。DB接続を張って `yield conn` し、テスト後に `conn.close()` する、といった
+「後片付けが必要なリソース」を扱うテストで頻出のパターンです。
+
+### スコープ — 毎回作り直すか、使い回すか
+
+fixture はデフォルトで **テスト関数1つにつき1回** 新しく作られますが(`scope="function"`)、
+DB接続のように準備コストが高いものは、複数のテストで使い回したくなります。
+
+```python
+@pytest.fixture(scope="module")     # このテストファイル内では1回だけ作られる
+def db_connection():
+    conn = connect_to_test_db()
+    yield conn
+    conn.close()
+```
+
+| スコープ | 作られる頻度 | 向いている用途 |
+|---|---|---|
+| `function`(既定) | テスト関数ごとに毎回 | 通常のオブジェクト。テスト同士を独立させたいとき |
+| `class` | テストクラスごとに1回 | クラス内のテストで前提を共有したいとき |
+| `module` | ファイルごとに1回 | 同じファイル内の全テストで、重いセットアップを使い回す |
+| `session` | テスト全体で1回 | DB接続・Dockerコンテナなど、起動が重いリソース |
+
+**トレードオフ注意**: スコープを広げるほど速くなりますが、fixture が返すオブジェクトが
+**ミュータブル(変更可能)** だと、あるテストの変更が別のテストに漏れて
+「実行順序で結果が変わる」というテストの独立性が壊れる バグの温床になります。
+まずは `function` スコープで書き、実測して遅いと分かってから広げるのが安全です。
+
+### fixture は fixture に依存できる、共有は conftest.py で
+
+fixture 関数自身も、別の fixture を引数として受け取れます(小さな部品を組み合わせて
+複雑な準備を組み立てられる、ということです)。
+
+```python
+@pytest.fixture
+def cheap_potion():
+    return Potion("回復薬", 50, stock=10)
+
+@pytest.fixture
+def inventory_with_cheap_potion(cheap_potion):   # fixture が fixture を使う
+    inv = Inventory()
+    inv.add(cheap_potion)
+    return inv
+```
+
+複数のテストファイルで同じ fixture を使いたい場合は、`tests/conftest.py` という
+特別な名前のファイルに置いておくと、**import なしで** 同じディレクトリの全テストファイルから
+自動的に見えるようになります(これも②の「名前で探す」仕組みの延長です)。
+
 ### parametrize — 表でまとめて検査
 
 ```python
@@ -93,6 +205,27 @@ def test_checkout(price, count, expected):
 > - 1 テスト 1 関心事。名前は「何を保証するか」が読める文に
 > - 境界値(0、1、満杯、空)と異常系(例外)を必ず含める
 > - テストしにくいコードは設計が悪いサイン。第4章の「受け取って返す」関数はテストが楽だったはず
+
+### 全部のクラス・関数にテストが要る?
+
+**要りません。** 「カバレッジ 100%」を目標にするのは、多くの場合コストに見合いません。
+判断基準は **「そのコードに壊れうる判断(分岐・条件)があるかどうか」** です。
+
+- **書くべき**: `if` / `for` / 例外送出など **分岐や条件がある** コード。第6・7章で見た
+  `sell()` の「在庫が足りなければ `SoldOutError`」「価格が負なら `ValueError`」のような
+  ロジックは、書き手の想定と実際の動きがズレやすい ―― テストが真価を発揮するのはここです
+- **書くべき**: 一度バグを出した箇所。同じバグの再発を機械的に防げます
+- **書くべき**: 他のモジュールから使われる公開 API(`Inventory.sell` のような、壊れると
+  影響範囲が広い関数)
+- **書かなくてよい**: 分岐が一切ない一直線のコード(単純な代入・委譲だけの1行メソッドなど)。
+  読めば正しいと分かるコードにテストを足しても、労力に見合う安心は増えません
+- **書かなくてよい**: プライベートなヘルパー関数を **個別に** テストすること。多くの場合、
+  それを呼び出す公開関数のテストを通せば間接的に検証できています
+
+`pytest --cov` のようなツールでカバレッジ率は見られますが、これは**「テストが薄い場所を探す
+レーダー」**として使うものであり、数字そのものを目標にしないでください。100% 達成のために
+分岐のない自明なコードまで無理にテストを書くのは、それこそ「テストのためのテスト」で
+時間の無駄です。**「ここが壊れたらどれだけ困るか」で優先順位を付ける** のが実務的な感覚です。
 
 ## 最終形 — プロジェクト構成
 
