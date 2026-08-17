@@ -117,48 +117,79 @@ default:
 
 ## ⚠️ 最大の落とし穴: 「nil の入ったインターフェース」は nil ではない
 
-Go 屈指の有名トラップです。まず仕組みから。
+Go 屈指の有名トラップです。焦らず一歩ずつ確認していきましょう。
 
-**インターフェース値の実体は「(型, 値)のペア」** です。
+### まず結論から
+
+```go
+var t *Truck = nil     // ① 「トラックが1台もない」を表すポインタ
+var c Carrier = t      // ② それを Carrier 変数に入れる
+
+fmt.Println(t == nil)  // true  ← そりゃそうだ
+fmt.Println(c == nil)  // false ← ！？ 同じ nil を入れたのに
+```
+
+`t` は間違いなく `nil` です。それを代入しただけの `c` が `nil` ではないと
+言われると、初見では絶対に納得できません。ここには Go 特有の仕組みがあります。
+
+### インターフェース変数は「宅配伝票」だと思ってください
+
+インターフェース変数は、値そのものを直接持つのではなく、
+**「① どの型か」「② その型の値は何か」という2つの欄がある伝票** を持っています。
 
 ```mermaid
 flowchart LR
-    subgraph i1["var c Carrier(真の nil)"]
-        T1["型: nil"]
-        V1["値: nil"]
+    subgraph i1["var c Carrier(何も書いていない伝票)"]
+        T1["① 型欄: 空"]
+        V1["② 値欄: 空"]
     end
-    subgraph i2["c = t(*Truck の nil が入った)"]
-        T2["型: *Truck"]
-        V2["値: nil"]
+    subgraph i2["c = t(型欄だけ書かれた伝票)"]
+        T2["① 型欄: *Truck"]
+        V2["② 値欄: nil"]
     end
     i1 -->|"c == nil → true"| R1[" "]
     i2 -->|"c == nil → false!!"| R2[" "]
 ```
 
-```go
-var t *Truck = nil
-var c Carrier = t   // ペアは (型=*Truck, 値=nil)
+- `var c Carrier` だけの状態 → 伝票そのものが白紙(①も②も空)。これが**本当の nil**。
+- `c = t` を実行した瞬間 → 中身(②)は空でも、**「これは \*Truck 型です」という
+  ①の欄だけは書き込まれる**。伝票に何か書かれている以上、白紙(nil)ではありません。
 
-fmt.Println(t == nil) // true
-fmt.Println(c == nil) // false !! 型情報が入っているから
-```
+Go の `== nil` 判定は、**①も②も両方空のとき、つまり本当の白紙のときだけ** true になります。
+①だけ書かれた伝票は、たとえ②が空でも「nil ではない何か」として扱われるのです。
 
-インターフェースの `== nil` は **「型も値も両方 nil」のときだけ** true です。
-実害が出る典型例がこれです:
+### この勘違いが実害を生む典型パターン
 
 ```go
 func check(d *Drone) error {
-	var err *MyError // 何も起きなかったので nil のまま
-	// ...
-	return err // ❌ (型=*MyError, 値=nil) が error に包まれて返る
+	var err *MyError // ここではまだ何のエラーも起きていない → nil のまま
+	// ... 何かの処理 ...
+	return err // ❌ 「①型欄=*MyError, ②値欄=nil」の伝票が error として返る
 }
 
 if err := check(d); err != nil {
-	// 何も起きていないのに、ここに必ず入る!!
+	// エラーは何も起きていないのに、なぜかここに入ってしまう!!
 }
 ```
 
-**対策: エラーがないときは、型付きの nil 変数ではなく、リテラルの `nil` を返す。**
+`return err` の時点で `err` の**型**は `*MyError` だと確定しているため、
+中身(②)が空でも「①型欄が書かれた伝票」が `error` インターフェースに包まれて
+返ります。呼び出し側は `err != nil` で「白紙かどうか」しか見ていないので、
+①が書かれているだけで「エラーあり」と誤判定してしまうわけです。
+
+**対策: エラーがないときは、型付きの nil 変数(`var err *MyError`)ではなく、
+何も型が書かれていないリテラルの `nil` をそのまま返す。**
+
+```go
+func check(d *Drone) error {
+	var myErr *MyError
+	// ... 何かの処理(失敗すれば myErr に値が入る)...
+	if myErr != nil {
+		return myErr // 型がわかっている本物のエラーとして返す
+	}
+	return nil // ✅ 伝票ごと真っ白の nil を返す(型欄すら書かない)
+}
+```
 
 > 🔍 **なぜこんな仕様なの?**
 > インターフェースが (型, 値) のペアなのは、`c.Deliver()` と呼ばれたとき
@@ -177,6 +208,81 @@ if err := check(d); err != nil {
 ```go
 var _ Carrier = (*Truck)(nil) // Truck が Carrier を満たさなければここでエラー
 ```
+
+## 🧪 実務でこそ光る場面: テストでの差し替え
+
+インターフェースのありがたみは、コードを書いているときより
+**テストを書くとき** に一番実感します。
+
+たとえば `dispatch` に「配達結果をDBへ記録する」機能を足したとします。
+
+```go
+type DeliveryLogger interface {
+	Log(carrierName, dest string, ok bool) error
+}
+
+type DBLogger struct{ db *sql.DB }
+
+func (l *DBLogger) Log(carrierName, dest string, ok bool) error {
+	_, err := l.db.Exec(
+		"INSERT INTO logs(carrier, dest, ok) VALUES ($1, $2, $3)",
+		carrierName, dest, ok,
+	)
+	return err
+}
+```
+
+`dispatch` がこの `DBLogger` を直接使うように書くと、`dispatch` をテストするたびに
+本物のDB接続が必要になります。起動が遅いうえ、ネットワークやDBの状態次第で
+テストが落ち(flaky)、しかも配車ロジックの正しさとは無関係な理由で失敗します。
+
+ここでインターフェースを挟みます。
+
+```go
+func dispatch(c Carrier, logger DeliveryLogger, dest string, weight float64) {
+	if weight > c.Capacity() {
+		logger.Log(fmt.Sprintf("%T", c), dest, false)
+		return
+	}
+	err := c.Deliver(dest)
+	logger.Log(fmt.Sprintf("%T", c), dest, err == nil)
+}
+```
+
+`dispatch` は `DeliveryLogger` というインターフェースしか知りません。テストでは、
+DBの代わりにメモリへ記録するだけの偽物を渡します。
+
+```go
+type MemoryLogger struct{ records []string }
+
+func (l *MemoryLogger) Log(carrierName, dest string, ok bool) error {
+	l.records = append(l.records, fmt.Sprintf("%s->%s:%v", carrierName, dest, ok))
+	return nil
+}
+
+func TestDispatch(t *testing.T) {
+	logger := &MemoryLogger{}
+	dispatch(&Truck{Name: "1号車"}, logger, "north", 320)
+
+	if len(logger.records) != 1 {
+		t.Fatalf("記録件数が想定と違う: got %d", len(logger.records))
+	}
+	if logger.records[0] != "*main.Truck->north:true" {
+		t.Errorf("記録内容が想定と違う: got %q", logger.records[0])
+	}
+}
+```
+
+`go test` はDBにもネットワークにも触れず、数ミリ秒で終わります。しかも
+`DBLogger` と `MemoryLogger` はどちらも `DeliveryLogger` の要件を満たしているという
+だけの関係で、互いの存在を知りません——「実装が先、抽象は後から」の実例です。
+
+> 🐍 **Python との違い②: 偽物は「動的モック」ではなく「本物の型」**
+> Python の `unittest.mock.Mock()` は、呼ばれたメソッド名を実行時に何でも
+> 受け止める万能の偽物です。便利な反面、`.Log()` を `.log()` とタイポしても
+> 実行するまで気づけません。Go では `MemoryLogger` はただの struct で、
+> `DeliveryLogger` の要件を満たしているかコンパイラが静的に検査します。
+> 別途「モックライブラリ」がほとんど要らないのは、この静的検査のおかげです。
 
 ## 🚇 完成コード: `express/day9/main.go`
 
