@@ -88,6 +88,42 @@ sum([]Gold{100, 250})          // 350(~int のおかげ)
 
 関数だけでなく、struct にも型パラメータを付けられます。
 
+### Before: `interface{}` で「なんでも入る箱」を作っていた時代
+
+```go
+type Queue struct {
+	items []interface{}
+}
+
+func (q *Queue) Push(x interface{}) {
+	q.items = append(q.items, x)
+}
+
+func (q *Queue) Pop() (interface{}, bool) {
+	if len(q.items) == 0 {
+		return nil, false
+	}
+	x := q.items[0]
+	q.items = q.items[1:]
+	return x, true
+}
+```
+
+```go
+q := Queue{}
+q.Push("回復薬")
+q.Push(42) // string 専用のつもりが int も紛れ込む。コンパイルは通ってしまう
+
+item, _ := q.Pop()
+s := item.(string) // 型アサーション。実は int だった場合はここで panic
+```
+
+`interface{}` は「何でも入る」代わりに「何が入っているか」の保証を失います。
+Push する型を間違えてもコンパイルは通り、Pop 側の型アサーションが対応していないと
+**実行時に panic** します。正しさは呼び出し側の注意力だけが頼りでした。
+
+### After: ジェネリクスで型を固定したまま使い回す
+
 ```go
 // Queue は任意の型 T を先入れ先出しで運ぶ万能コンテナ
 type Queue[T any] struct {
@@ -131,6 +167,69 @@ slices.SortFunc(parcels, func(a, b Parcel) int {
 	return cmp.Compare(a.Weight, b.Weight) // 重い順・軽い順も自在
 })
 maps.Keys(ledger) // maps パッケージも同様
+```
+
+## 自前のコレクション操作 — Filter/Map の複製をなくす
+
+標準ライブラリの `slices`/`maps` だけで足りない「独自のフィルタ・変換処理」は
+実務でよく書きます。ここでも同じ問題が起きます。
+
+### Before: 型ごとに同じロジックを複製
+
+```go
+func FilterInts(xs []int, pred func(int) bool) []int {
+	var out []int
+	for _, x := range xs {
+		if pred(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func FilterParcels(xs []Parcel, pred func(Parcel) bool) []Parcel {
+	var out []Parcel // ロジックは FilterInts と一字一句同じ
+	for _, x := range xs {
+		if pred(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+```
+
+型が増えるたびに `FilterXxx` が増殖します。手を抜いて `interface{}` 版を
+1つだけ書くと、今度は呼び出し側が毎回型アサーションする羽目になります。
+
+### After: 型パラメータ1つで全部まかなう
+
+```go
+func Filter[T any](xs []T, pred func(T) bool) []T {
+	var out []T
+	for _, x := range xs {
+		if pred(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+heavy := Filter(parcels, func(p Parcel) bool { return p.Weight > 10 })
+even := Filter([]int{1, 2, 3, 4}, func(n int) bool { return n%2 == 0 })
+```
+
+`Map`(演習1の `mapSlice` そのもの)や `Reduce` も同じ形で書けます。
+
+```go
+func Map[T, U any](xs []T, f func(T) U) []U {
+	out := make([]U, len(xs))
+	for i, x := range xs {
+		out[i] = f(x)
+	}
+	return out
+}
+
+ids := Map(parcels, func(p Parcel) string { return p.ID }) // 伝票番号一覧
 ```
 
 ## 使いすぎ注意 — インターフェースとの使い分け
