@@ -40,6 +40,58 @@ Python の `for` は言語の構文ですが、Ruby の `each` は **ただの�
 「繰り返し」すら言語機能ではなくオブジェクトへのメッセージ——だから
 **自分のクラスにも「独自のループ」を後から生やせます**。これが決定的な違いです。
 
+> 🔍 **なぜそうなっているの? — ブロックが「言語機能」を代替する仕組み**
+> Python は「繰り返し」以外にも、用途ごとに **専用の言語機能** を持っています。
+> リソース管理には `with` 文 + `__enter__`/`__exit__` プロトコル、後処理付きの
+> 計測には `@contextmanager` デコレータ + ジェネレータ、リトライには
+> デコレータ(や外部ライブラリ)……という具合に、**やりたいことが増えるたび
+> 新しい概念を覚える** 必要があります。
+>
+> Ruby は違います。「メソッドがブロックを受け取り、`yield` で実行する」という
+> **たった1つの仕組み** で、これら全部を素のメソッド定義だけで実現できます。
+>
+> ```ruby
+> def with_timer(label)
+>   start = Time.now
+>   result = yield
+>   puts "#{label}: #{((Time.now - start) * 1000).round(2)}ms"
+>   result
+> end
+>
+> with_timer("重い処理") { heavy_computation }
+> ```
+>
+> ```python
+> from contextlib import contextmanager
+> import time
+>
+> @contextmanager        # デコレータという別の言語機能
+> def with_timer(label):
+>     start = time.time()
+>     yield               # ジェネレータという別の概念
+>     print(f"{label}: {(time.time()-start)*1000:.2f}ms")
+>
+> with with_timer("重い処理"):   # withという専用構文
+>     heavy_computation()
+> ```
+>
+> | やりたいこと | Ruby | Python |
+> |---|---|---|
+> | 繰り返し | `each`(ただのメソッド) | `for`(言語構文) |
+> | リソース管理 | `File.open do...end`(ただのメソッド) | `with` + `__enter__`/`__exit__` |
+> | 計測・後処理 | `with_timer do...end`(ただのメソッド) | `@contextmanager` + ジェネレータ |
+> | リトライ | `three_times_retry do...end`(ただのメソッド) | デコレータ or 外部ライブラリ |
+>
+> **ただし「常にシンプル」というわけではありません。** 単純な繰り返しや絞り込みは
+> Python の内包表記の方が短く書けることもよくあります(`[x*2 for x in items if x > 1]`
+> vs `items.select { |x| x > 1 }.map { |x| x * 2 }` は互角です)。Ruby が勝るのは
+> **行数の少なさ** よりも **覚える概念の少なさ** です。一方でPythonの `with`/`@decorator`
+> は「見ただけで何をしているか分かる」という **構文からの意味の読み取りやすさ** に
+> 優れています。Ruby の `foo do...end` は、それが繰り返しなのかリソース管理なのか
+> リトライなのか、`foo` の中身を知らないと分かりません。自由さと引き換えに、
+> 読みやすさは「そのメソッドをどれだけ知っているか」に依存する、というのが
+> Ruby 流ブロックの代償です。
+
 ## map / select / reject / sum — 変換と絞り込み
 
 ```ruby
